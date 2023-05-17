@@ -1,0 +1,585 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: XKS demo stack with VPC, Instances, NLB and the KMS key, the whole deal.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: demo-xks
+    Description: The name of the project to use in resource names and tags
+  NATInstanceAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-arm64-gp2
+    Description: The SSM Parameter poiting to the AMI for the NAT instance. Must be ARM64. Change it at your own risk as it could break the user-data.
+  XKSProxyInstanceAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-kernel-5.10-hvm-x86_64-gp2
+    Description: The SSM Parameter poiting to the AMI for the XKS instance. Must be x86_64. Change it at your own risk as it could break the user-data.
+  XKSProxyAccessKeyId:
+    Type: String
+    Default: BETWEEN2TENAND3TENCHARACTERS
+    Description: The Access Key ID that the XKS Proxy will use to authenticate requests from KMS
+  XKSProxySecretAccessKey:
+    Type: String
+    Default: YouCanReplaceThisWithSomeSecretOfLength43To64
+    Description: The Secret Access Key that the XKS Proxy will use to validate the signatures of the requests from KMS
+  ACMCertificateArn:
+    Type: String
+    Description: The ACM certificate ARN of the Public Certificate used by the Network Load Balancer. Must use the same name that will be used for the VPC Service Endpoint.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Mandatory parameter"
+        Parameters:
+          - ACMCertificateArn
+      - Label:
+          default: "Optionnal parameters (safe to change only at stack creation, if you wish)"
+        Parameters:
+          - ProjectName
+          - XKSProxyAccessKeyId
+          - XKSProxySecretAccessKey
+      - Label:
+          default: "EC2 Amazon Machine Images (do not change)"
+        Parameters:
+          - NATInstanceAMI
+          - XKSProxyInstanceAMI
+
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: "10.42.0.0/24"
+    Private1:
+      CIDR: "10.42.0.0/26"
+    Private2:
+      CIDR: "10.42.0.64/26"
+    Public1:
+      CIDR: "10.42.0.128/26"
+    Public2:
+      CIDR: "10.42.0.192/26"
+  XKSConfig:
+    XKSProxy:
+      COPassword: COPassword1
+      CUPassword: CUPassword1
+
+Resources:
+##########################################################
+#                      SECTION: VPC                      #
+##########################################################
+  #######
+  # VPC #
+  #######
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock:
+        Fn::FindInMap:
+          - SubnetConfig
+          - VPC
+          - CIDR
+      Tags:
+        - Key: Name
+          Value: !Sub 'vpc-${ProjectName}'
+  ###################
+  # Private subnets #
+  ###################
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock:
+        Fn::FindInMap:
+          - SubnetConfig
+          - Private1
+          - CIDR
+      AvailabilityZone: !Sub ${AWS::Region}a
+      Tags:
+        - Key: Network
+          Value: Private
+        - Key: Name
+          Value: !Sub 'subnet-${ProjectName}-private-a'
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock:
+        Fn::FindInMap:
+          - SubnetConfig
+          - Private2
+          - CIDR
+      AvailabilityZone: !Sub ${AWS::Region}b
+      Tags:
+        - Key: Network
+          Value: Private
+        - Key: Name
+          Value: !Sub 'subnet-${ProjectName}-private-b'
+  ##################
+  # Public subnets #
+  ##################
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock:
+        Fn::FindInMap:
+          - SubnetConfig
+          - Public1
+          - CIDR
+      AvailabilityZone: !Sub ${AWS::Region}a
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub 'subnet-${ProjectName}-public-a'
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock:
+        Fn::FindInMap:
+          - SubnetConfig
+          - Public2
+          - CIDR
+      AvailabilityZone: !Sub ${AWS::Region}b
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub 'subnet-${ProjectName}-public-b'
+  ####################
+  # Internet Gateway #
+  ####################
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'igw-${ProjectName}'
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref IGW
+      VpcId: !Ref VPC
+  #################
+  # NAT instances #
+  #################
+  NATInstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'scg-${ProjectName}-nat-instances'
+      GroupDescription: Allow access from the VPC and outbound to everything
+      SecurityGroupIngress:
+        - CidrIp: !GetAtt VPC.CidrBlock
+          IpProtocol: -1
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      Tags:
+        - Key: Name
+          Value: !Sub 'scg-${ProjectName}-nat-instances'
+      VpcId: !Ref VPC
+  NATInstanceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t4g.nano
+        ImageId: !Ref NATInstanceAMI
+        CreditSpecification:
+          CpuCredits: standard
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !GetAtt NATInstanceSG.GroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              DeleteOnTermination: true
+              VolumeType: gp3
+        UserData:
+          Fn::Base64:
+            !Sub |
+              #!/bin/bash
+              # Enable NAT on iptables
+              yum install -y iptables-services
+              systemctl enable iptables
+              systemctl start iptables
+              iptables -t nat -A POSTROUTING -o eth0 -s ${VPC.CidrBlock} -j MASQUERADE
+              iptables -I FORWARD 1 -o eth0 -j ACCEPT
+              service iptables save
+              # Enable IP forward on Kernel
+              echo 1 > /proc/sys/net/ipv4/ip_forward
+              echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-ipforward.conf
+              # Disable SSM
+              yum erase -y amazon-ssm-agent
+  NATInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet1
+      SourceDestCheck: false
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NATInstanceLaunchTemplate
+        Version: !GetAtt NATInstanceLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub 'ec2-${ProjectName}-nat1'
+  #################################
+  # Private routing configuration #
+  #################################
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'rt-${ProjectName}-private-a'
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NATInstance1
+  PrivateSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable1
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'rt-${ProjectName}-private-b'
+  PrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable2
+  ################################
+  # Public routing configuration #
+  ################################
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'rt-${ProjectName}-public'
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+       RouteTableId: !Ref PublicRouteTable
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId: !Ref IGW
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  #####################
+  # Gateway Endpoints #
+  #####################
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable1
+        - !Ref PrivateRouteTable2
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref VPC
+  DynamoDBEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable1
+        - !Ref PrivateRouteTable2
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
+      VpcId: !Ref VPC
+##########################################################
+#                   END SECTION: VPC                     #
+##########################################################
+
+##########################################################
+#            SECTION: XKS PROXY with SOFT HSM            #
+##########################################################
+  ############
+  # Role SSM #
+  ############
+  XKSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub role-ec2-${ProjectName}-xksproxy
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Path: /
+  XKSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Ref XKSInstanceRole
+      Roles:
+        - !Ref XKSInstanceRole
+  ##################
+  # Security Group #
+  ##################
+  XKSInstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'scg-${ProjectName}-xksproxy-instances'
+      GroupDescription: Allow access on port 80 for XKS and outbound to everything
+      SecurityGroupIngress:
+        - Description: Inbound to XKS proxy from unknown KMS IPs
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      Tags:
+        - Key: Name
+          Value: !Sub 'scg-${ProjectName}-xksproxy-instances'
+      VpcId: !Ref VPC
+  ################
+  # EC2 Instance #
+  ################
+  XKSInstanceLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t3.micro
+        ImageId: !Ref XKSProxyInstanceAMI
+        IamInstanceProfile:
+          Arn: !GetAtt XKSInstanceProfile.Arn
+        CreditSpecification:
+          CpuCredits: unlimited
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            Groups:
+              - !GetAtt XKSInstanceSG.GroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              DeleteOnTermination: true
+              VolumeType: gp3
+        UserData:
+          Fn::Base64:
+            !Sub 
+              - |
+                #!/bin/bash
+                ####################################################
+                # /!\ There are secrets in clear-text in there /!\ #
+                # /!\   We are installing development tools    /!\ #
+                # /!\    We are compiling software as root     /!\ #
+                #    Obviously NOT suitable for production use     #
+                ####################################################
+                export HOME=/root
+                cd /root
+                ###############################################
+                # Install DEVTools & prereqs for C++ and Rust #
+                ###############################################
+                yum groupinstall -yq "Development tools"
+                yum install -yq openssl openssl-devel opensc
+                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+                export PATH="/usr/local/bin:/root/.cargo/bin:$PATH"
+                ###############################
+                # Compile and install SoftHSM #
+                ###############################
+                git clone https://github.com/opendnssec/SoftHSMv2.git
+                cd SoftHSMv2
+                git checkout tags/2.6.1
+                sh autogen.sh
+                ./configure
+                make
+                make install
+                cd ..
+                softhsm2-util --init-token --slot 0 --label "XKS token" --so-pin ${copass} --pin ${cupass}
+                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                  --token-label "XKS token" --login --login-type user \
+                  --keygen --id F0 --label foo --key-type aes:32 \
+                  --pin ${cupass}
+                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                  --token-label "XKS token" --login --login-type user \
+                  --keygen --id B0 --label bar --key-type aes:32 \
+                  --pin ${cupass}
+                # At this point, SoftHSM is installed and ready to be used by XKS
+                # with 2 AES keys labelled "foo" and "bar"
+                ##############################################################
+                # Compile and install AWS XKS proxy reference implementation #
+                ##############################################################
+                git clone https://github.com/aws-samples/aws-kms-xks-proxy.git
+                cd aws-kms-xks-proxy
+                git checkout c0eef3eef4fa906fa5a85a72e99af45e0b50115a
+                make
+                yum install -y xks-axum/target/release/aws-kms-xks-proxy.rpm
+                mkdir -p /var/local/xks-proxy/.secret
+                mkdir -p /var/log/xks-proxy
+                ###################################################
+                # Create the configuration file for the XKS proxy #
+                ###################################################
+                cat << EOF > /var/local/xks-proxy/.secret/settings.toml
+                # from /root/aws-kms-xks-proxy/xks-axum/configuration/settings_softhsmv2.toml
+                # comments removed here to reduce user-data size, see origin for more details
+                [server]
+                ip = "0.0.0.0"
+                port = 80
+                region = "${AWS::Region}"
+                service = "kms-xks-proxy"
+                [server.tcp_keepalive]
+                tcp_keepalive_secs = 60
+                tcp_keepalive_retries = 3
+                tcp_keepalive_interval_secs = 1
+                [tracing]
+                is_stdout_writer_enabled = true
+                is_file_writer_enabled = true
+                level = "DEBUG"
+                directory = "/var/log/xks-proxy"
+                file_prefix = "xks-proxy.log"
+                rotation_kind = "DAILY"
+                [security]
+                is_sigv4_auth_enabled = true
+                is_tls_enabled = false
+                is_mtls_enabled = false
+                [[external_key_stores]]
+                uri_path_prefix = ""
+                sigv4_access_key_id = "${XKSProxyAccessKeyId}"
+                sigv4_secret_access_key = "${XKSProxySecretAccessKey}"
+                xks_key_id_set = ["foo", "bar"]
+                [pkcs11]
+                session_pool_max_size = 30
+                session_pool_timeout_milli = 0
+                session_eager_close = false
+                user_pin = "${cupass}"
+                PKCS11_HSM_MODULE = "/usr/local/lib/softhsm/libsofthsm2.so"
+                context_read_timeout_milli = 10
+                [pkcs11_logger]
+                PKCS11_LOGGER_LIBRARY_PATH = ""
+                PKCS11_LOGGER_LOG_FILE_PATH = "/var/log/xks-proxy/pkcs11-logger-output.log"
+                PKCS11_LOGGER_FLAGS = "0"
+                [limits]
+                max_plaintext_in_base64 = 8192
+                max_aad_in_base64 = 16384
+                [hsm_capabilities]
+                can_generate_iv = false
+                is_zero_iv_required = false
+                EOF
+                ##########################################
+                # Enable and start the XKS proxy service #
+                ##########################################
+                systemctl enable xks-proxy
+                systemctl start xks-proxy
+                # At this point, XKS proxy is installed, ready and running
+              - copass: !FindInMap [XKSConfig, XKSProxy, COPassword]
+                cupass: !FindInMap [XKSConfig, XKSProxy, CUPassword]
+  XKSInstancesASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub asg-${ProjectName}-xksproxy
+      LaunchTemplate:
+        LaunchTemplateId: !Ref XKSInstanceLaunchTemplate
+        Version: !GetAtt XKSInstanceLaunchTemplate.LatestVersionNumber
+      MaxSize: 1
+      MinSize: 1
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 1200
+      TargetGroupARNs:
+        - !Ref XKSProxyTG
+      Tags:
+        - Key: AsgName
+          PropagateAtLaunch: false
+          Value: !Sub asg-${ProjectName}-sovereign-instances
+        - Key: Name
+          PropagateAtLaunch: true
+          Value: !Sub ec2-${ProjectName}-xksproxy
+        - Key: Project
+          PropagateAtLaunch: true
+          Value: !Ref ProjectName
+  ########################
+  # VPC Endpoint for KMS #
+  ########################
+  XKSProxyNLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      IpAddressType: ipv4
+      Scheme: internal
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: 'true'
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub nlb-${ProjectName}-xksproxy
+  XKSProxyNLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref XKSProxyNLB
+      Port: 443
+      Protocol: TLS
+      Certificates:
+        - CertificateArn: !Ref ACMCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref XKSProxyTG
+  XKSProxyTG:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Protocol: TCP
+      Port: 80
+      TargetType: instance
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 300
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub tg-${ProjectName}-xksproxy
+  XKSProxyEndpoint:
+    Type: AWS::EC2::VPCEndpointService
+    Properties:
+      AcceptanceRequired: false
+      NetworkLoadBalancerArns:
+        - !Ref XKSProxyNLB
+  XKSProxyEndpointServicePerm:
+    Type: AWS::EC2::VPCEndpointServicePermissions
+    Properties:
+      AllowedPrincipals:
+        - !Sub cks.kms.${AWS::Region}.amazonaws.com
+      ServiceId: !Ref XKSProxyEndpoint
+##########################################################
+#          END SECTION: XKS PROXY with SOFT HSM          #
+##########################################################
+
+Outputs:
+  VPCEndpointService:
+    Description: The Proxy XKS VPC endpoint to use for KMS configuration
+    Value: !Ref XKSProxyEndpoint
+  XKSProxyAccessKeyId:
+    Description: "KMS configuration, The Proxy credential: Access key ID"
+    Value: !Ref XKSProxyAccessKeyId
+  XKSProxySecretAccessKey:
+    Description: "KMS configuration, The Proxy credential: Secret access key"
+    Value: !Ref XKSProxySecretAccessKey
