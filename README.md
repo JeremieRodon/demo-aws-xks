@@ -22,20 +22,18 @@ See the [AWS KMS XKS announcement](https://aws.amazon.com/blogs/aws/announcing-a
 The demonstration setup will look like this:
 ![overview1](docs/solution-overview.png)
 
-We deploy a dedicated VPC with two subnets in a single Availability Zone. The public subnet contains a single EC2 instance used as a NAT instance. The private subnet will host an EC2 instance with the XKS proxy and SoftHSMv2 installed, as well as a Network Load Balancer with a TLS listener on port TCP 443. The Network Load Balancer will support the creation of a VPC Service Endpoint that AWS KMS will use to talk with the XKS proxy.
+We deploy a dedicated VPC with four subnets in two Availability Zone. The public subnets each contain a single EC2 instance used as a NAT instance for their availability zone. The private subnets each host an EC2 instance with the XKS proxy and SoftHSMv2 installed, as well as a Network Load Balancer with a TLS listener on port TCP 443. The Network Load Balancer will support the creation of a VPC Service Endpoint that AWS KMS will use to talk with the XKS proxy. Finally, XKS proxy instances use an EFS share as storage for SoftHSMv2 so that each instance has access to the same keys. This also ensure that the XKS proxy instances are stateless and throwable.
 
-AWS KMS imposes the use of a named VPC Service Endpoint with a publicly valid X.509 certificate for the same name. It means you need to have a **public** DNS hosted zone at disposal in order to sucessfully deploy this demo (Amazon Route53 is not required and you can use another DNS service). Technically you could also use an external certificate provider, but AWS Certificate Manager (ACM) is free to use for public certificates and makes the deployment easier.
-
-Finally, we choose to use an S3 bucket with KMS encryption to play with the KMS XKS key we create, but of course this key is just another Customer Master Key (CMK) and could as well be used with EBS volumes, RDS instances, etc... so feel free to use it however you want once the demo is deployed.
+AWS KMS imposes the use of a custom named VPC Service Endpoint with a TLS listener using a publicly valid X.509 certificate for the same name. It means you need to have a **public** DNS hosted zone at disposal in order to sucessfully deploy this demo (Amazon Route53 is encouraged but not required and you can use another DNS service) because DNS verification is required for the VPC Service Endpoint custom name (and probably also by your X.509 certificate provider).
 
 # Prerequisites
 In order to sucessfully deploy this demo, you will need:
 - administrative access to an AWS account;
 - administrative access to a public DNS hosted zone (Amazon Route53 or an external provider).
 
-The total cost of the AWS resources deployed for this demonstration is expected around $0.05/hour in eu-west-1 (Ireland) - or $1/day.
+The total cost of the AWS resources deployed for this demonstration is expected around $0.09/hour in eu-west-1 (Ireland) - or $2/day.
 
-Assuming you already have all the prerequisites and some AWS knowledge (mainly ACM, CloudFormation and KMS), the deployment should take 20 minutes.
+Assuming you already have all the prerequisites (a public DNS hosted zone) and some AWS knowledge (ACM, CloudFormation and KMS), the deployment should take less than 30 minutes, including AWS validations for the certificate and the custom endpoint service name.
 
 # Deployment instructions
 ## Choose an AWS region

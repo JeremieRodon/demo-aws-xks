@@ -226,6 +226,19 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub 'ec2-${ProjectName}-nat1'
+  NATInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet2
+      SourceDestCheck: false
+      LaunchTemplate:
+        LaunchTemplateId: !Ref NATInstanceLaunchTemplate
+        Version: !GetAtt NATInstanceLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub 'ec2-${ProjectName}-nat2'
   #################################
   # Private routing configuration #
   #################################
@@ -254,6 +267,12 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub 'rt-${ProjectName}-private-b'
+  PrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NATInstance2
   PrivateSubnetRouteTableAssociation2:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -337,9 +356,9 @@ Resources:
       InstanceProfileName: !Ref XKSInstanceRole
       Roles:
         - !Ref XKSInstanceRole
-  ##################
-  # Security Group #
-  ##################
+  ###################
+  # Security Groups #
+  ###################
   XKSInstanceSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -358,9 +377,47 @@ Resources:
         - Key: Name
           Value: !Sub 'scg-${ProjectName}-xksproxy-instances'
       VpcId: !Ref VPC
-  ################
-  # EC2 Instance #
-  ################
+  XKSEfsSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub 'scg-${ProjectName}-xksproxy-efs'
+      GroupDescription: Allow access on port 2049 for EFS from the XKS instances SG
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !GetAtt XKSInstanceSG.GroupId
+      SecurityGroupEgress: []
+      Tags:
+        - Key: Name
+          Value: !Sub 'scg-${ProjectName}-xksproxy-efs'
+      VpcId: !Ref VPC
+  #################
+  # EFS HSM Share #
+  #################
+  XKSEfs:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+  XKSEfsMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref XKSEfs
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroups:
+      - !GetAtt XKSEfsSG.GroupId
+  XKSEfsMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref XKSEfs
+      SubnetId: !Ref PrivateSubnet2
+      SecurityGroups:
+      - !GetAtt XKSEfsSG.GroupId
+  #################
+  # EC2 Instances #
+  #################
   XKSInstanceLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -394,10 +451,10 @@ Resources:
                 export HOME=/root
                 cd /root
                 ###############################################
-                # Install DEVTools & prereqs for C++ and Rust #
+                # Install DEVTools for C++ and Rust & prereqs #
                 ###############################################
                 yum groupinstall -yq "Development tools"
-                yum install -yq openssl openssl-devel opensc
+                yum install -yq openssl openssl-devel opensc amazon-efs-utils
                 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
                 export PATH="/usr/local/bin:/root/.cargo/bin:$PATH"
                 ###############################
@@ -411,15 +468,26 @@ Resources:
                 make
                 make install
                 cd ..
-                softhsm2-util --init-token --slot 0 --label "XKS token" --so-pin ${copass} --pin ${cupass}
-                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
-                  --token-label "XKS token" --login --login-type user \
-                  --keygen --id F0 --label foo --key-type aes:32 \
-                  --pin ${cupass}
-                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
-                  --token-label "XKS token" --login --login-type user \
-                  --keygen --id B0 --label bar --key-type aes:32 \
-                  --pin ${cupass}
+                # Mount the EFS file system and lock a witness file
+                mkdir -p /var/lib/softhsm/tokens
+                mount -t efs -o tls ${XKSEfs} /var/lib/softhsm/tokens
+                (
+                  # Acquire lock on /var/lib/softhsm/tokens/.softhsm.lock (fd 200)
+                  flock -x -n 200 || exit 1
+                  [ -f /var/lib/softhsm/tokens/aready_installed.witness ] && exit 1
+                  echo Installing SoftHSMv2 token and creating keys
+                  touch /var/lib/softhsm/tokens/aready_installed.witness
+                  # Do stuff
+                  softhsm2-util --init-token --slot 0 --label "XKS token" --so-pin ${copass} --pin ${cupass}
+                  pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                    --token-label "XKS token" --login --login-type user \
+                    --keygen --id F0 --label foo --key-type aes:32 \
+                    --pin ${cupass}
+                  pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                    --token-label "XKS token" --login --login-type user \
+                    --keygen --id B0 --label bar --key-type aes:32 \
+                    --pin ${cupass}
+                ) 200>/var/lib/softhsm/tokens/.softhsm.lock
                 # At this point, SoftHSM is installed and ready to be used by XKS
                 # with 2 AES keys labelled "foo" and "bar"
                 ##############################################################
@@ -491,18 +559,22 @@ Resources:
                 cupass: !FindInMap [XKSConfig, XKSProxy, CUPassword]
   XKSInstancesASG:
     Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - XKSEfsMountTarget1
+      - XKSEfsMountTarget2
     Properties:
       AutoScalingGroupName: !Sub asg-${ProjectName}-xksproxy
       LaunchTemplate:
         LaunchTemplateId: !Ref XKSInstanceLaunchTemplate
         Version: !GetAtt XKSInstanceLaunchTemplate.LatestVersionNumber
-      MaxSize: 1
-      MinSize: 1
-      DesiredCapacity: 1
+      MaxSize: 2
+      MinSize: 2
+      DesiredCapacity: 2
       VPCZoneIdentifier:
         - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 1200
+      HealthCheckGracePeriod: 900
       TargetGroupARNs:
         - !Ref XKSProxyTG
       Tags:
@@ -515,9 +587,9 @@ Resources:
         - Key: Project
           PropagateAtLaunch: true
           Value: !Ref ProjectName
-  ########################
-  # VPC Endpoint for KMS #
-  ########################
+  ##########################
+  # NLB & Service Endpoint #
+  ##########################
   XKSProxyNLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -549,6 +621,10 @@ Resources:
     Properties:
       Protocol: TCP
       Port: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /ping
+      Matcher:
+        HttpCode: 200
       TargetType: instance
       TargetGroupAttributes:
         - Key: deregistration_delay.timeout_seconds
