@@ -62,9 +62,9 @@ Mappings:
       CUPassword: CUPassword1
 
 Resources:
-##########################################################
-#                      SECTION: VPC                      #
-##########################################################
+  ##########################################################
+  #                      SECTION: VPC                      #
+  ##########################################################
   #######
   # VPC #
   #######
@@ -80,7 +80,7 @@ Resources:
           - CIDR
       Tags:
         - Key: Name
-          Value: !Sub 'vpc-${ProjectName}'
+          Value: !Sub "vpc-${ProjectName}"
   ###################
   # Private subnets #
   ###################
@@ -98,7 +98,7 @@ Resources:
         - Key: Network
           Value: Private
         - Key: Name
-          Value: !Sub 'subnet-${ProjectName}-private-a'
+          Value: !Sub "subnet-${ProjectName}-private-a"
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -113,7 +113,7 @@ Resources:
         - Key: Network
           Value: Private
         - Key: Name
-          Value: !Sub 'subnet-${ProjectName}-private-b'
+          Value: !Sub "subnet-${ProjectName}-private-b"
   ##################
   # Public subnets #
   ##################
@@ -131,7 +131,7 @@ Resources:
         - Key: Network
           Value: Public
         - Key: Name
-          Value: !Sub 'subnet-${ProjectName}-public-a'
+          Value: !Sub "subnet-${ProjectName}-public-a"
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
@@ -146,7 +146,7 @@ Resources:
         - Key: Network
           Value: Public
         - Key: Name
-          Value: !Sub 'subnet-${ProjectName}-public-b'
+          Value: !Sub "subnet-${ProjectName}-public-b"
   ####################
   # Internet Gateway #
   ####################
@@ -155,7 +155,7 @@ Resources:
     Properties:
       Tags:
         - Key: Name
-          Value: !Sub 'igw-${ProjectName}'
+          Value: !Sub "igw-${ProjectName}"
   IGWAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -167,7 +167,7 @@ Resources:
   NATInstanceSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'scg-${ProjectName}-nat-instances'
+      GroupName: !Sub "scg-${ProjectName}-nat-instances"
       GroupDescription: Allow access from the VPC and outbound to everything
       SecurityGroupIngress:
         - CidrIp: !GetAtt VPC.CidrBlock
@@ -177,7 +177,7 @@ Resources:
           IpProtocol: -1
       Tags:
         - Key: Name
-          Value: !Sub 'scg-${ProjectName}-nat-instances'
+          Value: !Sub "scg-${ProjectName}-nat-instances"
       VpcId: !Ref VPC
   NATInstanceLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
@@ -198,21 +198,20 @@ Resources:
               DeleteOnTermination: true
               VolumeType: gp3
         UserData:
-          Fn::Base64:
-            !Sub |
-              #!/bin/bash
-              # Enable NAT on iptables
-              yum install -y iptables-services
-              systemctl enable iptables
-              systemctl start iptables
-              iptables -t nat -A POSTROUTING -o eth0 -s ${VPC.CidrBlock} -j MASQUERADE
-              iptables -I FORWARD 1 -o eth0 -j ACCEPT
-              service iptables save
-              # Enable IP forward on Kernel
-              echo 1 > /proc/sys/net/ipv4/ip_forward
-              echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-ipforward.conf
-              # Disable SSM
-              yum erase -y amazon-ssm-agent
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # Enable NAT on iptables
+            yum install -y iptables-services
+            systemctl enable iptables
+            systemctl start iptables
+            iptables -t nat -A POSTROUTING -o eth0 -s ${VPC.CidrBlock} -j MASQUERADE
+            iptables -I FORWARD 1 -o eth0 -j ACCEPT
+            service iptables save
+            # Enable IP forward on Kernel
+            echo 1 > /proc/sys/net/ipv4/ip_forward
+            echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/90-ipforward.conf
+            # Disable SSM
+            yum erase -y amazon-ssm-agent
   NATInstance1:
     Type: AWS::EC2::Instance
     Properties:
@@ -225,7 +224,7 @@ Resources:
         Version: !GetAtt NATInstanceLaunchTemplate.LatestVersionNumber
       Tags:
         - Key: Name
-          Value: !Sub 'ec2-${ProjectName}-nat1'
+          Value: !Sub "ec2-${ProjectName}-nat1"
   NATInstance2:
     Type: AWS::EC2::Instance
     Properties:
@@ -238,7 +237,7 @@ Resources:
         Version: !GetAtt NATInstanceLaunchTemplate.LatestVersionNumber
       Tags:
         - Key: Name
-          Value: !Sub 'ec2-${ProjectName}-nat2'
+          Value: !Sub "ec2-${ProjectName}-nat2"
   #################################
   # Private routing configuration #
   #################################
@@ -248,7 +247,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub 'rt-${ProjectName}-private-a'
+          Value: !Sub "rt-${ProjectName}-private-a"
   PrivateRoute1:
     Type: AWS::EC2::Route
     Properties:
@@ -266,7 +265,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub 'rt-${ProjectName}-private-b'
+          Value: !Sub "rt-${ProjectName}-private-b"
   PrivateRoute2:
     Type: AWS::EC2::Route
     Properties:
@@ -287,14 +286,14 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub 'rt-${ProjectName}-public'
+          Value: !Sub "rt-${ProjectName}-public"
   PublicRoute:
     Type: AWS::EC2::Route
     DependsOn: IGWAttachment
     Properties:
-       RouteTableId: !Ref PublicRouteTable
-       DestinationCidrBlock: 0.0.0.0/0
-       GatewayId: !Ref IGW
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
   PublicSubnetRouteTableAssociation1:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -326,13 +325,13 @@ Resources:
         - !Ref PrivateRouteTable2
       ServiceName: !Sub com.amazonaws.${AWS::Region}.dynamodb
       VpcId: !Ref VPC
-##########################################################
-#                   END SECTION: VPC                     #
-##########################################################
+  ##########################################################
+  #                   END SECTION: VPC                     #
+  ##########################################################
 
-##########################################################
-#            SECTION: XKS PROXY with SOFT HSM            #
-##########################################################
+  ##########################################################
+  #            SECTION: XKS PROXY with SOFT HSM            #
+  ##########################################################
   ############
   # Role SSM #
   ############
@@ -362,7 +361,7 @@ Resources:
   XKSInstanceSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'scg-${ProjectName}-xksproxy-instances'
+      GroupName: !Sub "scg-${ProjectName}-xksproxy-instances"
       GroupDescription: Allow access on port 80 for XKS and outbound to everything
       SecurityGroupIngress:
         - Description: Inbound to XKS proxy from unknown KMS IPs
@@ -375,12 +374,12 @@ Resources:
           IpProtocol: -1
       Tags:
         - Key: Name
-          Value: !Sub 'scg-${ProjectName}-xksproxy-instances'
+          Value: !Sub "scg-${ProjectName}-xksproxy-instances"
       VpcId: !Ref VPC
   XKSEfsSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub 'scg-${ProjectName}-xksproxy-efs'
+      GroupName: !Sub "scg-${ProjectName}-xksproxy-efs"
       GroupDescription: Allow access on port 2049 for EFS from the XKS instances SG
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -390,7 +389,7 @@ Resources:
       SecurityGroupEgress: []
       Tags:
         - Key: Name
-          Value: !Sub 'scg-${ProjectName}-xksproxy-efs'
+          Value: !Sub "scg-${ProjectName}-xksproxy-efs"
       VpcId: !Ref VPC
   #################
   # EFS HSM Share #
@@ -407,14 +406,14 @@ Resources:
       FileSystemId: !Ref XKSEfs
       SubnetId: !Ref PrivateSubnet1
       SecurityGroups:
-      - !GetAtt XKSEfsSG.GroupId
+        - !GetAtt XKSEfsSG.GroupId
   XKSEfsMountTarget2:
     Type: AWS::EFS::MountTarget
     Properties:
       FileSystemId: !Ref XKSEfs
       SubnetId: !Ref PrivateSubnet2
       SecurityGroups:
-      - !GetAtt XKSEfsSG.GroupId
+        - !GetAtt XKSEfsSG.GroupId
   #################
   # EC2 Instances #
   #################
@@ -422,7 +421,7 @@ Resources:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateData:
-        InstanceType: t3.micro
+        InstanceType: t3.small
         ImageId: !Ref XKSProxyInstanceAMI
         IamInstanceProfile:
           Arn: !GetAtt XKSInstanceProfile.Arn
@@ -438,125 +437,126 @@ Resources:
               DeleteOnTermination: true
               VolumeType: gp3
         UserData:
-          Fn::Base64:
-            !Sub 
-              - |
-                #!/bin/bash
-                ####################################################
-                # /!\ There are secrets in clear-text in there /!\ #
-                # /!\   We are installing development tools    /!\ #
-                # /!\    We are compiling software as root     /!\ #
-                #    Obviously NOT suitable for production use     #
-                ####################################################
-                export HOME=/root
-                cd /root
-                ###############################################
-                # Install DEVTools for C++ and Rust & prereqs #
-                ###############################################
-                yum groupinstall -yq "Development tools"
-                yum install -yq openssl openssl-devel opensc amazon-efs-utils
-                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-                export PATH="/usr/local/bin:/root/.cargo/bin:$PATH"
-                ###############################
-                # Compile and install SoftHSM #
-                ###############################
-                git clone https://github.com/opendnssec/SoftHSMv2.git
-                cd SoftHSMv2
-                git checkout tags/2.6.1
-                sh autogen.sh
-                ./configure
-                make
-                make install
-                cd ..
-                # Mount the EFS file system and lock a witness file
-                mkdir -p /var/lib/softhsm/tokens
-                mount -t efs -o tls ${XKSEfs} /var/lib/softhsm/tokens
-                (
-                  # Acquire lock on /var/lib/softhsm/tokens/.softhsm.lock (fd 200)
-                  flock -x -n 200 || exit 1
-                  [ -f /var/lib/softhsm/tokens/aready_installed.witness ] && exit 1
-                  echo Installing SoftHSMv2 token and creating keys
-                  touch /var/lib/softhsm/tokens/aready_installed.witness
-                  # Do stuff
-                  softhsm2-util --init-token --slot 0 --label "XKS token" --so-pin ${copass} --pin ${cupass}
-                  pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
-                    --token-label "XKS token" --login --login-type user \
-                    --keygen --id F0 --label foo --key-type aes:32 \
-                    --pin ${cupass}
-                  pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
-                    --token-label "XKS token" --login --login-type user \
-                    --keygen --id B0 --label bar --key-type aes:32 \
-                    --pin ${cupass}
-                ) 200>/var/lib/softhsm/tokens/.softhsm.lock
-                # At this point, SoftHSM is installed and ready to be used by XKS
-                # with 2 AES keys labelled "foo" and "bar"
-                ##############################################################
-                # Compile and install AWS XKS proxy reference implementation #
-                ##############################################################
-                git clone https://github.com/aws-samples/aws-kms-xks-proxy.git
-                cd aws-kms-xks-proxy
-                git checkout c0eef3eef4fa906fa5a85a72e99af45e0b50115a
-                make
-                yum install -y xks-axum/target/release/aws-kms-xks-proxy.rpm
-                mkdir -p /var/local/xks-proxy/.secret
-                mkdir -p /var/log/xks-proxy
-                ###################################################
-                # Create the configuration file for the XKS proxy #
-                ###################################################
-                cat << EOF > /var/local/xks-proxy/.secret/settings.toml
-                # from /root/aws-kms-xks-proxy/xks-axum/configuration/settings_softhsmv2.toml
-                # comments removed here to reduce user-data size, see origin for more details
-                [server]
-                ip = "0.0.0.0"
-                port = 80
-                region = "${AWS::Region}"
-                service = "kms-xks-proxy"
-                [server.tcp_keepalive]
-                tcp_keepalive_secs = 60
-                tcp_keepalive_retries = 3
-                tcp_keepalive_interval_secs = 1
-                [tracing]
-                is_stdout_writer_enabled = true
-                is_file_writer_enabled = true
-                level = "DEBUG"
-                directory = "/var/log/xks-proxy"
-                file_prefix = "xks-proxy.log"
-                rotation_kind = "DAILY"
-                [security]
-                is_sigv4_auth_enabled = true
-                is_tls_enabled = false
-                is_mtls_enabled = false
-                [[external_key_stores]]
-                uri_path_prefix = ""
-                sigv4_access_key_id = "${XKSProxyAccessKeyId}"
-                sigv4_secret_access_key = "${XKSProxySecretAccessKey}"
-                xks_key_id_set = ["foo", "bar"]
-                [pkcs11]
-                session_pool_max_size = 30
-                session_pool_timeout_milli = 0
-                session_eager_close = false
-                user_pin = "${cupass}"
-                PKCS11_HSM_MODULE = "/usr/local/lib/softhsm/libsofthsm2.so"
-                context_read_timeout_milli = 10
-                [pkcs11_logger]
-                PKCS11_LOGGER_LIBRARY_PATH = ""
-                PKCS11_LOGGER_LOG_FILE_PATH = "/var/log/xks-proxy/pkcs11-logger-output.log"
-                PKCS11_LOGGER_FLAGS = "0"
-                [limits]
-                max_plaintext_in_base64 = 8192
-                max_aad_in_base64 = 16384
-                [hsm_capabilities]
-                can_generate_iv = false
-                is_zero_iv_required = false
-                EOF
-                ##########################################
-                # Enable and start the XKS proxy service #
-                ##########################################
-                systemctl enable xks-proxy
-                systemctl start xks-proxy
-                # At this point, XKS proxy is installed, ready and running
-              - copass: !FindInMap [XKSConfig, XKSProxy, COPassword]
-                cupass: !FindInMap [XKSConfig, XKSProxy, CUPassword]
+          Fn::Base64: !Sub
+            - |
+              #!/bin/bash
+              ####################################################
+              # /!\ There are secrets in clear-text in there /!\ #
+              # /!\   We are installing development tools    /!\ #
+              # /!\    We are compiling software as root     /!\ #
+              #    Obviously NOT suitable for production use     #
+              ####################################################
+              export HOME=/root
+              cd /root
+              ###############################################
+              # Install DEVTools for C++ and Rust & prereqs #
+              ###############################################
+              yum groupinstall -yq "Development tools"
+              yum install -yq openssl openssl-devel opensc amazon-efs-utils
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH="/usr/local/bin:/root/.cargo/bin:$PATH"
+              ###############################
+              # Compile and install SoftHSM #
+              ###############################
+              git clone https://github.com/opendnssec/SoftHSMv2.git
+              cd SoftHSMv2
+              git checkout tags/2.6.1
+              sh autogen.sh
+              ./configure
+              make
+              make install
+              cd ..
+              # Mount the EFS file system and lock a witness file
+              mkdir -p /var/lib/softhsm/tokens
+              mount -t efs -o tls ${XKSEfs} /var/lib/softhsm/tokens
+              (
+                # Acquire lock on /var/lib/softhsm/tokens/.softhsm.lock (fd 200)
+                flock -x -n 200 || exit 1
+                [ -f /var/lib/softhsm/tokens/aready_installed.witness ] && exit 1
+                echo Installing SoftHSMv2 token and creating keys
+                touch /var/lib/softhsm/tokens/aready_installed.witness
+                # Do stuff
+                softhsm2-util --init-token --slot 0 --label "XKS token" --so-pin ${copass} --pin ${cupass}
+                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                  --token-label "XKS token" --login --login-type user \
+                  --keygen --id F0 --label foo --key-type aes:32 \
+                  --pin ${cupass}
+                pkcs11-tool --module /usr/local/lib/softhsm/libsofthsm2.so \
+                  --token-label "XKS token" --login --login-type user \
+                  --keygen --id B0 --label bar --key-type aes:32 \
+                  --pin ${cupass}
+              ) 200>/var/lib/softhsm/tokens/.softhsm.lock
+              # At this point, SoftHSM is installed and ready to be used by XKS
+              # with 2 AES keys labelled "foo" and "bar"
+              ##############################################################
+              # Compile and install AWS XKS proxy reference implementation #
+              ##############################################################
+              git clone https://github.com/aws-samples/aws-kms-xks-proxy.git
+              cd aws-kms-xks-proxy
+              git checkout c0eef3eef4fa906fa5a85a72e99af45e0b50115a
+              # Patch the scratchstack-aws-signature version because latest 0.10.x are no longer compatible
+              sed -i -e 's/scratchstack-aws-signature = "0.10"/scratchstack-aws-signature = "=0.10.5"/' xks-axum/Cargo.toml
+              make
+              yum install -y xks-axum/target/release/aws-kms-xks-proxy.rpm
+              mkdir -p /var/local/xks-proxy/.secret
+              mkdir -p /var/log/xks-proxy
+              ###################################################
+              # Create the configuration file for the XKS proxy #
+              ###################################################
+              cat << EOF > /var/local/xks-proxy/.secret/settings.toml
+              # from /root/aws-kms-xks-proxy/xks-axum/configuration/settings_softhsmv2.toml
+              # comments removed here to reduce user-data size, see origin for more details
+              [server]
+              ip = "0.0.0.0"
+              port = 80
+              region = "${AWS::Region}"
+              service = "kms-xks-proxy"
+              [server.tcp_keepalive]
+              tcp_keepalive_secs = 60
+              tcp_keepalive_retries = 3
+              tcp_keepalive_interval_secs = 1
+              [tracing]
+              is_stdout_writer_enabled = true
+              is_file_writer_enabled = true
+              level = "DEBUG"
+              directory = "/var/log/xks-proxy"
+              file_prefix = "xks-proxy.log"
+              rotation_kind = "DAILY"
+              [security]
+              is_sigv4_auth_enabled = true
+              is_tls_enabled = false
+              is_mtls_enabled = false
+              [[external_key_stores]]
+              uri_path_prefix = ""
+              sigv4_access_key_id = "${XKSProxyAccessKeyId}"
+              sigv4_secret_access_key = "${XKSProxySecretAccessKey}"
+              xks_key_id_set = ["foo", "bar"]
+              [pkcs11]
+              session_pool_max_size = 30
+              session_pool_timeout_milli = 0
+              session_eager_close = false
+              user_pin = "${cupass}"
+              PKCS11_HSM_MODULE = "/usr/local/lib/softhsm/libsofthsm2.so"
+              context_read_timeout_milli = 10
+              [pkcs11_logger]
+              PKCS11_LOGGER_LIBRARY_PATH = ""
+              PKCS11_LOGGER_LOG_FILE_PATH = "/var/log/xks-proxy/pkcs11-logger-output.log"
+              PKCS11_LOGGER_FLAGS = "0"
+              [limits]
+              max_plaintext_in_base64 = 8192
+              max_aad_in_base64 = 16384
+              [hsm_capabilities]
+              can_generate_iv = false
+              is_zero_iv_required = false
+              EOF
+              ##########################################
+              # Enable and start the XKS proxy service #
+              ##########################################
+              systemctl enable xks-proxy
+              systemctl start xks-proxy
+              # At this point, XKS proxy is installed, ready and running
+            - copass: !FindInMap [XKSConfig, XKSProxy, COPassword]
+              cupass: !FindInMap [XKSConfig, XKSProxy, CUPassword]
   XKSInstancesASG:
     Type: AWS::AutoScaling::AutoScalingGroup
     DependsOn:
@@ -598,7 +598,7 @@ Resources:
       Scheme: internal
       LoadBalancerAttributes:
         - Key: load_balancing.cross_zone.enabled
-          Value: 'true'
+          Value: "true"
       Subnets:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
